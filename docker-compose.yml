@@ -12,6 +12,7 @@ services:
     volumes:
       - openfang-data:/data
     environment:
+      - OPENFANG_LISTEN=0.0.0.0:4200
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
