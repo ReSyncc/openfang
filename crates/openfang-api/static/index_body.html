@@ -140,6 +140,22 @@
         </template>
       </div>
 
+      <!-- Drives -->
+      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Drives">
+        <div class="nav-section-title" @click="collapsed = !collapsed">
+          <span class="nav-label">Drives</span>
+          <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
+        </div>
+        <template x-if="!collapsed">
+          <div x-transition>
+            <a class="nav-item" :class="{ active: page === 'drives' }" @click="navigate('drives')" :aria-current="page === 'drives' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+              <span class="nav-label">Explorer</span>
+            </a>
+          </div>
+        </template>
+      </div>
+
       <!-- Extensions -->
       <div class="nav-section" x-data="{ collapsed: false }" aria-label="Extensions">
         <div class="nav-section-title" @click="collapsed = !collapsed">
@@ -4960,6 +4976,402 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             </div>
           </div>
 
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- ─── Drive Explorer page ─── -->
+    <template x-if="page === 'drives'">
+      <div x-data="{
+        drives: [],
+        activeDrive: 'main',
+        currentPath: '/',
+        breadcrumbs: [{name: 'Root', path: '/'}],
+        entries: [],
+        loading: true,
+        loadError: null,
+        searchQuery: '',
+        searchResults: [],
+        searching: false,
+        selectedFile: null,
+        viewMode: 'list',
+        showUpload: false,
+        uploadProgress: null,
+        dragOver: false,
+        pipelineStatus: null,
+        rules: [],
+        repos: [],
+        editingTags: false,
+        tagInput: '',
+
+        async init() {
+          await this.loadDrives();
+          await this.loadEntries();
+          await this.loadRules();
+          await this.loadRepos();
+        },
+
+        async loadDrives() {
+          try {
+            const r = await fetch('/api/drives', {headers: window.apiHeaders ? window.apiHeaders() : {}});
+            this.drives = await r.json();
+            if (this.drives.length && !this.drives.find(d => d.name === this.activeDrive)) {
+              this.activeDrive = this.drives[0].name;
+            }
+          } catch(e) { console.error('loadDrives', e); }
+        },
+
+        async loadEntries() {
+          this.loading = true;
+          this.loadError = null;
+          this.selectedFile = null;
+          try {
+            const r = await fetch(`/api/drives/${this.activeDrive}/ls?path=${encodeURIComponent(this.currentPath)}`, {headers: window.apiHeaders ? window.apiHeaders() : {}});
+            if (!r.ok) throw new Error(await r.text());
+            this.entries = await r.json();
+          } catch(e) {
+            this.loadError = e.message;
+            this.entries = [];
+          }
+          this.loading = false;
+        },
+
+        async loadRules() {
+          try {
+            const r = await fetch(`/api/drives/${this.activeDrive}/rules`, {headers: window.apiHeaders ? window.apiHeaders() : {}});
+            this.rules = await r.json();
+          } catch(e) { this.rules = []; }
+        },
+
+        async loadRepos() {
+          try {
+            const r = await fetch(`/api/drives/${this.activeDrive}/repos`, {headers: window.apiHeaders ? window.apiHeaders() : {}});
+            this.repos = await r.json();
+          } catch(e) { this.repos = []; }
+        },
+
+        async loadPipelineStatus() {
+          try {
+            const r = await fetch(`/api/drives/${this.activeDrive}/index/status`, {headers: window.apiHeaders ? window.apiHeaders() : {}});
+            this.pipelineStatus = await r.json();
+          } catch(e) { this.pipelineStatus = null; }
+        },
+
+        navigateTo(path) {
+          this.currentPath = path;
+          const parts = path.split('/').filter(Boolean);
+          this.breadcrumbs = [{name: this.activeDrive, path: '/'}];
+          let acc = '';
+          for (const p of parts) {
+            acc += '/' + p;
+            this.breadcrumbs.push({name: p, path: acc});
+          }
+          this.loadEntries();
+        },
+
+        navigateUp() {
+          if (this.currentPath === '/') return;
+          const parts = this.currentPath.split('/').filter(Boolean);
+          parts.pop();
+          this.navigateTo('/' + parts.join('/'));
+        },
+
+        clickEntry(entry) {
+          if (entry.is_dir) {
+            this.navigateTo(entry.path);
+          } else {
+            this.selectedFile = entry;
+            this.editingTags = false;
+          }
+        },
+
+        async doSearch() {
+          if (!this.searchQuery.trim()) { this.searchResults = []; return; }
+          this.searching = true;
+          try {
+            const r = await fetch(`/api/drives/${this.activeDrive}/search?q=${encodeURIComponent(this.searchQuery)}&type=metadata`, {headers: window.apiHeaders ? window.apiHeaders() : {}});
+            const data = await r.json();
+            this.searchResults = Array.isArray(data) ? data : [];
+          } catch(e) { this.searchResults = []; }
+          this.searching = false;
+        },
+
+        fileIcon(entry) {
+          if (entry.is_dir) return '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"var(--accent)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z\"/></svg>';
+          const ext = entry.name.split('.').pop().toLowerCase();
+          if (['pdf'].includes(ext)) return '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#ef4444\" stroke-width=\"2\"><path d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z\"/><path d=\"M14 2v6h6\"/></svg>';
+          if (['jpg','jpeg','png','gif','svg','webp'].includes(ext)) return '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#10b981\" stroke-width=\"2\"><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\"/><circle cx=\"8.5\" cy=\"8.5\" r=\"1.5\"/><path d=\"m21 15-5-5L5 21\"/></svg>';
+          if (['mp3','wav','ogg'].includes(ext)) return '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#8b5cf6\" stroke-width=\"2\"><path d=\"M9 18V5l12-2v13\"/><circle cx=\"6\" cy=\"18\" r=\"3\"/><circle cx=\"18\" cy=\"16\" r=\"3\"/></svg>';
+          if (['mp4','webm','mov'].includes(ext)) return '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#ec4899\" stroke-width=\"2\"><rect x=\"2\" y=\"2\" width=\"20\" height=\"20\" rx=\"2.18\"/><path d=\"m10 8 6 4-6 4V8z\"/></svg>';
+          if (['js','ts','rs','py','go','java','c','cpp','json','toml','yaml','yml','html','css'].includes(ext)) return '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#06b6d4\" stroke-width=\"2\"><polyline points=\"16 18 22 12 16 6\"/><polyline points=\"8 6 2 12 8 18\"/></svg>';
+          return '<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"var(--text-dim)\" stroke-width=\"2\"><path d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z\"/><path d=\"M14 2v6h6\"/></svg>';
+        },
+
+        formatSize(bytes) {
+          if (!bytes) return '—';
+          if (bytes < 1024) return bytes + ' B';
+          if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+          if (bytes < 1024*1024*1024) return (bytes/(1024*1024)).toFixed(1) + ' MB';
+          return (bytes/(1024*1024*1024)).toFixed(2) + ' GB';
+        },
+
+        formatDate(iso) {
+          if (!iso) return '—';
+          try { return new Date(iso).toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric', hour:'2-digit', minute:'2-digit'}); }
+          catch { return iso; }
+        },
+
+        async handleDrop(event) {
+          this.dragOver = false;
+          const files = event.dataTransfer?.files;
+          if (!files || !files.length) return;
+          for (const file of files) {
+            await this.uploadFile(file);
+          }
+        },
+
+        async uploadFile(file) {
+          const path = this.currentPath.replace(/\\/+$/, '') + '/' + file.name;
+          this.uploadProgress = {name: file.name, pct: 0};
+          try {
+            const buf = await file.arrayBuffer();
+            const r = await fetch(`/api/drives/${this.activeDrive}/file?path=${encodeURIComponent(path)}`, {
+              method: 'PUT',
+              headers: {'Content-Type': 'application/octet-stream', ...(window.apiHeaders ? window.apiHeaders() : {})},
+              body: buf,
+            });
+            if (!r.ok) throw new Error(await r.text());
+            this.uploadProgress = null;
+            this.loadEntries();
+          } catch(e) {
+            this.uploadProgress = null;
+            alert('Upload failed: ' + e.message);
+          }
+        },
+
+        async deleteFile(entry) {
+          if (!confirm('Delete ' + entry.name + '?')) return;
+          try {
+            await fetch(`/api/drives/${this.activeDrive}/file?path=${encodeURIComponent(entry.path)}`, {method: 'DELETE', headers: window.apiHeaders ? window.apiHeaders() : {}});
+            this.selectedFile = null;
+            this.loadEntries();
+          } catch(e) { alert('Delete failed: ' + e.message); }
+        },
+
+        async saveTags() {
+          if (!this.selectedFile) return;
+          const tags = this.tagInput.split(',').map(t => t.trim()).filter(Boolean);
+          try {
+            await fetch(`/api/drives/${this.activeDrive}/tags`, {
+              method: 'PUT',
+              headers: {'Content-Type': 'application/json', ...(window.apiHeaders ? window.apiHeaders() : {})},
+              body: JSON.stringify({path: this.selectedFile.path, tags}),
+            });
+            this.editingTags = false;
+          } catch(e) { alert('Failed to save tags: ' + e.message); }
+        },
+
+        downloadUrl(entry) {
+          return `/api/drives/${this.activeDrive}/file?path=${encodeURIComponent(entry.path)}`;
+        },
+
+      }">
+
+        <!-- Header -->
+        <div class="page-header">
+          <div class="flex items-center gap-3" style="min-width:0">
+            <h2 style="margin:0;display:flex;align-items:center;gap:8px">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              Drive Explorer
+            </h2>
+            <!-- Drive selector -->
+            <template x-if="drives.length > 1">
+              <select x-model="activeDrive" @change="navigateTo('/'); loadRules(); loadRepos()" style="padding:4px 8px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12px;font-family:var(--font-mono)">
+                <template x-for="d in drives" :key="d.name">
+                  <option :value="d.name" x-text="d.name"></option>
+                </template>
+              </select>
+            </template>
+          </div>
+          <div class="flex gap-2 items-center">
+            <!-- View toggle -->
+            <button class="btn btn-ghost btn-sm" :class="{ active: viewMode === 'list' }" @click="viewMode = 'list'" title="List view">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            </button>
+            <button class="btn btn-ghost btn-sm" :class="{ active: viewMode === 'grid' }" @click="viewMode = 'grid'" title="Grid view">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            </button>
+            <label class="btn btn-primary btn-sm" style="cursor:pointer;position:relative;overflow:hidden">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Upload
+              <input type="file" multiple style="position:absolute;inset:0;opacity:0;cursor:pointer" @change="for(const f of $event.target.files) uploadFile(f)">
+            </label>
+          </div>
+        </div>
+
+        <div class="page-body" style="display:flex;gap:0;padding:0;overflow:hidden;height:calc(100vh - 120px)">
+
+          <!-- Main file area -->
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden">
+
+            <!-- Breadcrumb + search bar -->
+            <div style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid var(--border-subtle);background:var(--bg-elevated);flex-shrink:0">
+              <button class="btn btn-ghost btn-sm" @click="navigateUp()" :disabled="currentPath === '/'" style="padding:4px 6px" title="Go up">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+              </button>
+              <!-- Breadcrumbs -->
+              <div style="display:flex;align-items:center;gap:2px;font-size:12px;font-family:var(--font-mono);min-width:0;flex:1;overflow-x:auto;white-space:nowrap">
+                <template x-for="(bc, i) in breadcrumbs" :key="bc.path">
+                  <span style="display:inline-flex;align-items:center;gap:2px">
+                    <span x-show="i > 0" style="color:var(--text-muted);margin:0 2px">/</span>
+                    <a @click.prevent="navigateTo(bc.path)" x-text="bc.name" style="cursor:pointer;color:var(--text-secondary);text-decoration:none;padding:2px 4px;border-radius:3px;transition:background 0.15s" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''"></a>
+                  </span>
+                </template>
+              </div>
+              <!-- Search -->
+              <div style="position:relative;width:220px;flex-shrink:0">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="position:absolute;left:8px;top:50%;transform:translateY(-50%)"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="text" x-model="searchQuery" @input.debounce.300ms="doSearch()" @keydown.escape="searchQuery=''; searchResults=[]" placeholder="Search files..." style="width:100%;padding:5px 8px 5px 28px;border:1px solid var(--border-subtle);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font-size:12px;outline:none;transition:border-color 0.15s" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border-subtle)'">
+              </div>
+            </div>
+
+            <!-- Upload progress -->
+            <div x-show="uploadProgress" x-transition style="padding:8px 16px;background:var(--accent-subtle);border-bottom:1px solid var(--border-subtle);font-size:12px;display:flex;align-items:center;gap:8px">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+              <span>Uploading <strong x-text="uploadProgress?.name"></strong>...</span>
+            </div>
+
+            <!-- Search results overlay -->
+            <template x-if="searchQuery.trim() && searchResults.length > 0">
+              <div style="padding:12px 16px;background:var(--bg-elevated);border-bottom:1px solid var(--border-subtle);max-height:300px;overflow-y:auto">
+                <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:8px;font-weight:600">Search Results</div>
+                <template x-for="sr in searchResults" :key="sr.entry?.path || Math.random()">
+                  <div @click="if (sr.entry) { selectedFile = sr.entry; searchQuery=''; searchResults=[]; }" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--radius-sm);cursor:pointer;transition:background 0.1s" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''">
+                    <span x-html="fileIcon(sr.entry || {name:'',is_dir:false})"></span>
+                    <span style="font-size:13px" x-text="sr.entry?.filename || sr.entry?.path"></span>
+                    <span style="font-size:11px;color:var(--text-muted);margin-left:auto;font-family:var(--font-mono)" x-text="sr.match_type"></span>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <!-- File listing -->
+            <div style="flex:1;overflow-y:auto;padding:0" @dragover.prevent="dragOver = true" @dragleave="dragOver = false" @drop.prevent="handleDrop($event)">
+
+              <!-- Drop zone overlay -->
+              <div x-show="dragOver" x-transition style="position:absolute;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb, var(--surface) 92%, transparent);border:2px dashed var(--accent);border-radius:8px;pointer-events:none">
+                <div style="text-align:center">
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" style="margin:0 auto 8px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  <div style="font-size:14px;font-weight:600;color:var(--accent)">Drop files to upload</div>
+                </div>
+              </div>
+
+              <!-- Loading -->
+              <div x-show="loading" class="loading-state" style="padding:48px"><div class="spinner"></div><span>Loading...</span></div>
+
+              <!-- Error -->
+              <div x-show="!loading && loadError" style="padding:32px;text-align:center">
+                <p style="color:var(--danger)" x-text="loadError"></p>
+                <button class="btn btn-ghost btn-sm" @click="loadEntries()">Retry</button>
+              </div>
+
+              <!-- Empty state -->
+              <div x-show="!loading && !loadError && entries.length === 0" class="empty-state" style="padding:48px">
+                <div class="empty-state-icon">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                </div>
+                <h3>Empty folder</h3>
+                <p>Drag and drop files here or click Upload.</p>
+              </div>
+
+              <!-- LIST VIEW -->
+              <template x-if="viewMode === 'list' && !loading && !loadError && entries.length > 0">
+                <div class="table-wrap" style="margin:0">
+                  <table style="width:100%">
+                    <thead>
+                      <tr>
+                        <th style="width:50%">Name</th>
+                        <th style="width:15%">Size</th>
+                        <th style="width:20%">Modified</th>
+                        <th style="width:15%;text-align:right">Type</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <template x-for="entry in entries" :key="entry.path">
+                        <tr @click="clickEntry(entry)" style="cursor:pointer;transition:background 0.1s" :class="{ 'selected-row': selectedFile && selectedFile.path === entry.path }" onmouseover="if(!this.classList.contains('selected-row'))this.style.background='var(--surface2)'" onmouseout="if(!this.classList.contains('selected-row'))this.style.background=''">
+                          <td style="display:flex;align-items:center;gap:8px">
+                            <span x-html="fileIcon(entry)" style="flex-shrink:0"></span>
+                            <span style="font-size:13px;font-weight:500" x-text="entry.name"></span>
+                          </td>
+                          <td style="font-size:12px;color:var(--text-dim);font-family:var(--font-mono)" x-text="entry.is_dir ? '—' : formatSize(entry.size_bytes)"></td>
+                          <td style="font-size:12px;color:var(--text-dim)" x-text="formatDate(entry.modified_at)"></td>
+                          <td style="font-size:11px;color:var(--text-muted);text-align:right;font-family:var(--font-mono)" x-text="entry.is_dir ? 'Folder' : entry.mime_type.split('/').pop()"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </template>
+
+              <!-- GRID VIEW -->
+              <template x-if="viewMode === 'grid' && !loading && !loadError && entries.length > 0">
+                <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px;padding:16px">
+                  <template x-for="entry in entries" :key="entry.path">
+                    <div @click="clickEntry(entry)" style="cursor:pointer;padding:16px 12px;border-radius:var(--radius-md);border:1px solid var(--border-subtle);background:var(--surface);text-align:center;transition:all 0.15s;position:relative" :style="selectedFile && selectedFile.path === entry.path ? 'border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)' : ''" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 4px 12px rgba(0,0,0,0.08)'" onmouseout="this.style.transform='';this.style.boxShadow=''">
+                      <div style="margin-bottom:8px" x-html="fileIcon(entry).replace('width=&quot;16&quot;','width=&quot;28&quot;').replace('height=&quot;16&quot;','height=&quot;28&quot;')"></div>
+                      <div style="font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="entry.name"></div>
+                      <div style="font-size:10px;color:var(--text-muted);margin-top:2px" x-text="entry.is_dir ? 'Folder' : formatSize(entry.size_bytes)"></div>
+                    </div>
+                  </template>
+                </div>
+              </template>
+
+            </div>
+
+            <!-- Status bar -->
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 16px;border-top:1px solid var(--border-subtle);background:var(--bg-elevated);font-size:11px;color:var(--text-muted);flex-shrink:0">
+              <span x-text="entries.length + ' item' + (entries.length !== 1 ? 's' : '')"></span>
+              <span x-text="'Drive: ' + activeDrive" style="font-family:var(--font-mono)"></span>
+            </div>
+          </div>
+
+          <!-- Right sidebar: file detail panel -->
+          <div x-show="selectedFile" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0 transform translate-x-4" x-transition:enter-end="opacity-100 transform translate-x-0" style="width:280px;border-left:1px solid var(--border-subtle);background:var(--bg-elevated);overflow-y:auto;flex-shrink:0;display:flex;flex-direction:column">
+            <template x-if="selectedFile">
+              <div style="padding:16px">
+                <!-- File icon large -->
+                <div style="text-align:center;padding:20px 0;margin-bottom:12px;background:var(--surface);border-radius:var(--radius-md);border:1px solid var(--border-subtle)">
+                  <div x-html="fileIcon(selectedFile).replace('width=&quot;16&quot;','width=&quot;40&quot;').replace('height=&quot;16&quot;','height=&quot;40&quot;')"></div>
+                  <div style="font-size:13px;font-weight:600;margin-top:8px;word-break:break-all;padding:0 8px" x-text="selectedFile.name"></div>
+                </div>
+
+                <!-- Metadata -->
+                <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:8px;font-weight:600">Details</div>
+                <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:12px;margin-bottom:16px">
+                  <span style="color:var(--text-muted)">Size</span>
+                  <span style="font-family:var(--font-mono)" x-text="formatSize(selectedFile.size_bytes)"></span>
+                  <span style="color:var(--text-muted)">Type</span>
+                  <span style="font-family:var(--font-mono);word-break:break-all" x-text="selectedFile.mime_type"></span>
+                  <span style="color:var(--text-muted)">Modified</span>
+                  <span x-text="formatDate(selectedFile.modified_at)"></span>
+                  <span style="color:var(--text-muted)">Path</span>
+                  <span style="font-family:var(--font-mono);word-break:break-all;font-size:11px" x-text="selectedFile.path"></span>
+                </div>
+
+                <!-- Actions -->
+                <div style="display:flex;gap:6px;margin-bottom:16px">
+                  <a :href="downloadUrl(selectedFile)" download class="btn btn-primary btn-sm" style="flex:1;text-align:center;text-decoration:none">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Download
+                  </a>
+                  <button class="btn btn-danger btn-sm" @click="deleteFile(selectedFile)" style="flex:1">Delete</button>
+                </div>
+
+                <!-- Close -->
+                <button class="btn btn-ghost btn-sm" @click="selectedFile = null" style="width:100%;margin-top:4px">Close</button>
+              </div>
+            </template>
           </div>
         </div>
       </div>

@@ -161,6 +161,8 @@ pub struct OpenFangKernel {
     agent_msg_locks: dashmap::DashMap<AgentId, Arc<tokio::sync::Mutex<()>>>,
     /// Weak self-reference for trigger dispatch (set after Arc wrapping).
     self_handle: OnceLock<Weak<OpenFangKernel>>,
+    /// Drive manager — virtual filesystem with auto-organization.
+    pub drive_manager: Option<Arc<openfang_drive::DriveManager>>,
 }
 
 /// Bounded in-memory delivery receipt tracker.
@@ -999,6 +1001,26 @@ impl OpenFangKernel {
         let initial_broadcast = config.broadcast.clone();
         let auto_reply_engine = crate::auto_reply::AutoReplyEngine::new(config.auto_reply.clone());
 
+        // Initialize drive manager (virtual filesystem)
+        let drive_manager = {
+            let db_path = config.data_dir.clone();
+            match openfang_drive::DriveManager::new_sync(
+                config.home_dir.clone(),
+                &config.drives,
+                &config.drives_rules,
+                db_path,
+            ) {
+                Ok(dm) => {
+                    info!("Drive manager initialized with {} drive(s)", config.drives.len().max(1));
+                    Some(Arc::new(dm))
+                }
+                Err(e) => {
+                    warn!("Drive manager init failed: {e} — drive features disabled");
+                    None
+                }
+            }
+        };
+
         let kernel = Self {
             config,
             registry: AgentRegistry::new(),
@@ -1049,6 +1071,7 @@ impl OpenFangKernel {
             default_model_override: std::sync::RwLock::new(None),
             agent_msg_locks: dashmap::DashMap::new(),
             self_handle: OnceLock::new(),
+            drive_manager,
         };
 
         // Restore persisted agents from SQLite
@@ -6326,6 +6349,148 @@ impl KernelHandle for OpenFangKernel {
 
         // Delegate to the normal spawn path (use trait method via KernelHandle::)
         KernelHandle::spawn_agent(self, manifest_toml, parent_id).await
+    }
+
+    // -- Drive operations --
+
+    async fn drive_list_drives(&self) -> Result<Vec<serde_json::Value>, String> {
+        let dm = self
+            .drive_manager
+            .as_ref()
+            .ok_or("Drive system not available")?;
+        let drives = dm.list_drives().await;
+        serde_json::to_value(&drives)
+            .map_err(|e| e.to_string())?
+            .as_array()
+            .cloned()
+            .ok_or_else(|| "Unexpected drives format".to_string())
+    }
+
+    async fn drive_list(
+        &self,
+        drive: &str,
+        path: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let dm = self
+            .drive_manager
+            .as_ref()
+            .ok_or("Drive system not available")?;
+        let vol = dm.get_volume(drive).await.map_err(|e| e.to_string())?;
+        openfang_drive::DriveManager::validate_path(path).map_err(|e| e.to_string())?;
+        let entries = vol.list(path).await.map_err(|e| e.to_string())?;
+        serde_json::to_value(&entries)
+            .map_err(|e| e.to_string())?
+            .as_array()
+            .cloned()
+            .ok_or_else(|| "Unexpected entries format".to_string())
+    }
+
+    async fn drive_read(&self, drive: &str, path: &str) -> Result<Vec<u8>, String> {
+        let dm = self
+            .drive_manager
+            .as_ref()
+            .ok_or("Drive system not available")?;
+        let vol = dm.get_volume(drive).await.map_err(|e| e.to_string())?;
+        openfang_drive::DriveManager::validate_path(path).map_err(|e| e.to_string())?;
+        vol.read(path).await.map_err(|e| e.to_string())
+    }
+
+    async fn drive_write(&self, drive: &str, path: &str, data: &[u8]) -> Result<(), String> {
+        let dm = self
+            .drive_manager
+            .as_ref()
+            .ok_or("Drive system not available")?;
+        let vol = dm.get_volume(drive).await.map_err(|e| e.to_string())?;
+        openfang_drive::DriveManager::validate_path(path).map_err(|e| e.to_string())?;
+        vol.write(path, data).await.map_err(|e| e.to_string())
+    }
+
+    async fn drive_delete(&self, drive: &str, path: &str) -> Result<(), String> {
+        let dm = self
+            .drive_manager
+            .as_ref()
+            .ok_or("Drive system not available")?;
+        let vol = dm.get_volume(drive).await.map_err(|e| e.to_string())?;
+        openfang_drive::DriveManager::validate_path(path).map_err(|e| e.to_string())?;
+        vol.delete(path).await.map_err(|e| e.to_string())
+    }
+
+    async fn drive_move(&self, drive: &str, from: &str, to: &str) -> Result<(), String> {
+        let dm = self
+            .drive_manager
+            .as_ref()
+            .ok_or("Drive system not available")?;
+        let vol = dm.get_volume(drive).await.map_err(|e| e.to_string())?;
+        openfang_drive::DriveManager::validate_path(from).map_err(|e| e.to_string())?;
+        openfang_drive::DriveManager::validate_path(to).map_err(|e| e.to_string())?;
+        vol.rename(from, to).await.map_err(|e| e.to_string())
+    }
+
+    async fn drive_copy(&self, drive: &str, from: &str, to: &str) -> Result<(), String> {
+        let dm = self
+            .drive_manager
+            .as_ref()
+            .ok_or("Drive system not available")?;
+        let vol = dm.get_volume(drive).await.map_err(|e| e.to_string())?;
+        openfang_drive::DriveManager::validate_path(from).map_err(|e| e.to_string())?;
+        openfang_drive::DriveManager::validate_path(to).map_err(|e| e.to_string())?;
+        vol.copy_file(from, to).await.map_err(|e| e.to_string())
+    }
+
+    async fn drive_search(
+        &self,
+        drive: &str,
+        query: &str,
+        search_type: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let dm = self
+            .drive_manager
+            .as_ref()
+            .ok_or("Drive system not available")?;
+        let vol = dm.get_volume(drive).await.map_err(|e| e.to_string())?;
+        let results =
+            openfang_drive::search::search(vol.index(), drive, query, search_type, None, None, 50)
+                .map_err(|e| e.to_string())?;
+        serde_json::to_value(&results)
+            .map_err(|e| e.to_string())?
+            .as_array()
+            .cloned()
+            .ok_or_else(|| "Unexpected search format".to_string())
+    }
+
+    async fn drive_info(&self, drive: &str, path: &str) -> Result<serde_json::Value, String> {
+        let dm = self
+            .drive_manager
+            .as_ref()
+            .ok_or("Drive system not available")?;
+        let vol = dm.get_volume(drive).await.map_err(|e| e.to_string())?;
+        openfang_drive::DriveManager::validate_path(path).map_err(|e| e.to_string())?;
+        let stat = vol.stat(path).await.map_err(|e| e.to_string())?;
+        let index_entry = vol
+            .index()
+            .get_file(drive, path)
+            .map_err(|e| e.to_string())?;
+        let mut info = serde_json::to_value(&stat).map_err(|e| e.to_string())?;
+        if let Some(entry) = index_entry {
+            info["index"] = serde_json::to_value(&entry).map_err(|e| e.to_string())?;
+        }
+        Ok(info)
+    }
+
+    async fn drive_set_tags(
+        &self,
+        drive: &str,
+        path: &str,
+        tags: &[String],
+    ) -> Result<(), String> {
+        let dm = self
+            .drive_manager
+            .as_ref()
+            .ok_or("Drive system not available")?;
+        let vol = dm.get_volume(drive).await.map_err(|e| e.to_string())?;
+        vol.index()
+            .set_tags(drive, path, tags)
+            .map_err(|e| e.to_string())
     }
 }
 

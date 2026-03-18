@@ -448,6 +448,110 @@ pub async fn execute_tool(
         // Canvas / A2UI tool
         "canvas_present" => tool_canvas_present(input, workspace_root).await,
 
+        // -- Drive tools --
+        "drive_read" => {
+            let drive = input["drive"].as_str().unwrap_or("main");
+            let path = input["path"].as_str().unwrap_or("/");
+            match kernel {
+                Some(kh) => match kh.drive_read(drive, path).await {
+                    Ok(data) => match String::from_utf8(data) {
+                        Ok(text) => Ok(text),
+                        Err(_) => Ok("[Binary file — content not displayable as text]".to_string()),
+                    },
+                    Err(e) => Err(e),
+                },
+                None => Err("Kernel not available for drive operations".to_string()),
+            }
+        }
+        "drive_write" => {
+            let drive = input["drive"].as_str().unwrap_or("main");
+            let path = input["path"].as_str().unwrap_or("");
+            let content = input["content"].as_str().unwrap_or("");
+            match kernel {
+                Some(kh) => kh.drive_write(drive, path, content.as_bytes()).await.map(|_| "File written successfully".to_string()),
+                None => Err("Kernel not available for drive operations".to_string()),
+            }
+        }
+        "drive_list" => {
+            let drive = input["drive"].as_str().unwrap_or("main");
+            let path = input["path"].as_str().unwrap_or("/");
+            match kernel {
+                Some(kh) => kh.drive_list(drive, path).await.map(|entries| {
+                    serde_json::to_string_pretty(&entries).unwrap_or_else(|_| "[]".to_string())
+                }),
+                None => Err("Kernel not available for drive operations".to_string()),
+            }
+        }
+        "drive_delete" => {
+            let drive = input["drive"].as_str().unwrap_or("main");
+            let path = input["path"].as_str().unwrap_or("");
+            match kernel {
+                Some(kh) => kh.drive_delete(drive, path).await.map(|_| "File deleted successfully".to_string()),
+                None => Err("Kernel not available for drive operations".to_string()),
+            }
+        }
+        "drive_move" => {
+            let drive = input["drive"].as_str().unwrap_or("main");
+            let from = input["from"].as_str().unwrap_or("");
+            let to = input["to"].as_str().unwrap_or("");
+            match kernel {
+                Some(kh) => kh.drive_move(drive, from, to).await.map(|_| "File moved successfully".to_string()),
+                None => Err("Kernel not available for drive operations".to_string()),
+            }
+        }
+        "drive_copy" => {
+            let drive = input["drive"].as_str().unwrap_or("main");
+            let from = input["from"].as_str().unwrap_or("");
+            let to = input["to"].as_str().unwrap_or("");
+            match kernel {
+                Some(kh) => kh.drive_copy(drive, from, to).await.map(|_| "File copied successfully".to_string()),
+                None => Err("Kernel not available for drive operations".to_string()),
+            }
+        }
+        "drive_search" => {
+            let drive = input["drive"].as_str().unwrap_or("main");
+            let query = input["query"].as_str().unwrap_or("");
+            let search_type = input["type"].as_str().unwrap_or("metadata");
+            match kernel {
+                Some(kh) => kh.drive_search(drive, query, search_type).await.map(|results| {
+                    serde_json::to_string_pretty(&results).unwrap_or_else(|_| "[]".to_string())
+                }),
+                None => Err("Kernel not available for drive operations".to_string()),
+            }
+        }
+        "drive_tags" => {
+            let drive = input["drive"].as_str().unwrap_or("main");
+            let path = input["path"].as_str().unwrap_or("");
+            let tags: Vec<String> = input["tags"]
+                .as_array()
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            match kernel {
+                Some(kh) => {
+                    if tags.is_empty() {
+                        // GET tags — return file info
+                        kh.drive_info(drive, path).await.map(|info| {
+                            serde_json::to_string_pretty(&info).unwrap_or_else(|_| "{}".to_string())
+                        })
+                    } else {
+                        // SET tags
+                        kh.drive_set_tags(drive, path, &tags).await.map(|_| "Tags updated successfully".to_string())
+                    }
+                },
+                None => Err("Kernel not available for drive operations".to_string()),
+            }
+        }
+        "drive_info" => {
+            let drive = input["drive"].as_str().unwrap_or("main");
+            let path = input["path"].as_str().unwrap_or("");
+            match kernel {
+                Some(kh) => kh.drive_info(drive, path).await.map(|info| {
+                    serde_json::to_string_pretty(&info).unwrap_or_else(|_| "{}".to_string())
+                }),
+                None => Err("Kernel not available for drive operations".to_string()),
+            }
+        }
+
         other => {
             // Fallback 1: MCP tools (mcp_{server}_{tool} prefix)
             if mcp::is_mcp_tool(other) {
@@ -1244,6 +1348,120 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "title": { "type": "string", "description": "Optional title for the canvas panel" }
                 },
                 "required": ["html"]
+            }),
+        },
+        // --- Drive tools ---
+        ToolDefinition {
+            name: "drive_read".to_string(),
+            description: "Read a file from a drive. Returns text content for text files.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "drive": { "type": "string", "description": "Drive name (default: 'main')", "default": "main" },
+                    "path": { "type": "string", "description": "File path within the drive (e.g. '/Documents/report.pdf')" }
+                },
+                "required": ["path"]
+            }),
+        },
+        ToolDefinition {
+            name: "drive_write".to_string(),
+            description: "Write content to a file on a drive. Creates parent directories as needed.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "drive": { "type": "string", "description": "Drive name (default: 'main')", "default": "main" },
+                    "path": { "type": "string", "description": "File path within the drive" },
+                    "content": { "type": "string", "description": "Content to write to the file" }
+                },
+                "required": ["path", "content"]
+            }),
+        },
+        ToolDefinition {
+            name: "drive_list".to_string(),
+            description: "List files and directories in a drive path.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "drive": { "type": "string", "description": "Drive name (default: 'main')", "default": "main" },
+                    "path": { "type": "string", "description": "Directory path to list (default: '/')", "default": "/" }
+                },
+                "required": []
+            }),
+        },
+        ToolDefinition {
+            name: "drive_delete".to_string(),
+            description: "Delete a file from a drive.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "drive": { "type": "string", "description": "Drive name (default: 'main')", "default": "main" },
+                    "path": { "type": "string", "description": "File path to delete" }
+                },
+                "required": ["path"]
+            }),
+        },
+        ToolDefinition {
+            name: "drive_move".to_string(),
+            description: "Move or rename a file on a drive.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "drive": { "type": "string", "description": "Drive name (default: 'main')", "default": "main" },
+                    "from": { "type": "string", "description": "Source file path" },
+                    "to": { "type": "string", "description": "Destination file path" }
+                },
+                "required": ["from", "to"]
+            }),
+        },
+        ToolDefinition {
+            name: "drive_copy".to_string(),
+            description: "Copy a file on a drive.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "drive": { "type": "string", "description": "Drive name (default: 'main')", "default": "main" },
+                    "from": { "type": "string", "description": "Source file path" },
+                    "to": { "type": "string", "description": "Destination file path" }
+                },
+                "required": ["from", "to"]
+            }),
+        },
+        ToolDefinition {
+            name: "drive_search".to_string(),
+            description: "Search files on a drive by filename, content, or semantic query.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "drive": { "type": "string", "description": "Drive name (default: 'main')", "default": "main" },
+                    "query": { "type": "string", "description": "Search query" },
+                    "type": { "type": "string", "description": "Search type: 'metadata' or 'semantic'", "default": "metadata" }
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolDefinition {
+            name: "drive_tags".to_string(),
+            description: "Get or set tags on a drive file. Call with tags array to set, without to get.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "drive": { "type": "string", "description": "Drive name (default: 'main')", "default": "main" },
+                    "path": { "type": "string", "description": "File path" },
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags to set (omit to get current tags)" }
+                },
+                "required": ["path"]
+            }),
+        },
+        ToolDefinition {
+            name: "drive_info".to_string(),
+            description: "Get detailed metadata and pipeline status for a file on a drive.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "drive": { "type": "string", "description": "Drive name (default: 'main')", "default": "main" },
+                    "path": { "type": "string", "description": "File path" }
+                },
+                "required": ["path"]
             }),
         },
     ]

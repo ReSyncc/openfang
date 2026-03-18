@@ -3823,6 +3823,7 @@ dependencies = [
  "hex",
  "hmac",
  "openfang-channels",
+ "openfang-drive",
  "openfang-extensions",
  "openfang-hands",
  "openfang-kernel",
@@ -3940,6 +3941,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "openfang-drive"
+version = "0.4.4"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "dirs 6.0.0",
+ "hex",
+ "openfang-types",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-test",
+ "toml 0.8.2",
+ "tracing",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
 name = "openfang-extensions"
 version = "0.4.4"
 dependencies = [
@@ -3999,6 +4023,7 @@ dependencies = [
  "hex",
  "libc",
  "openfang-channels",
+ "openfang-drive",
  "openfang-extensions",
  "openfang-hands",
  "openfang-memory",

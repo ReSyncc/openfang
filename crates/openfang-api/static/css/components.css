@@ -3441,3 +3441,7 @@ mark.search-highlight {
 }
 .trade-buy { background: rgba(34, 197, 94, 0.15); color: var(--success); }
 .trade-sell { background: rgba(239, 68, 68, 0.15); color: var(--error); }
+
+/* Drive Explorer */
+.selected-row { background: var(--accent-subtle) !important; }
+.selected-row td { color: var(--text) !important; }

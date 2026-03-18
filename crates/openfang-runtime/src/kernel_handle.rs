@@ -238,6 +238,77 @@ pub trait KernelHandle: Send + Sync {
         Err("Channel file data send not available".to_string())
     }
 
+    // -- Drive operations --
+
+    /// List all mounted drives.
+    async fn drive_list_drives(&self) -> Result<Vec<serde_json::Value>, String> {
+        Err("Drive system not available".to_string())
+    }
+
+    /// List files in a drive directory.
+    async fn drive_list(&self, drive: &str, path: &str) -> Result<Vec<serde_json::Value>, String> {
+        let _ = (drive, path);
+        Err("Drive system not available".to_string())
+    }
+
+    /// Read a file from a drive.
+    async fn drive_read(&self, drive: &str, path: &str) -> Result<Vec<u8>, String> {
+        let _ = (drive, path);
+        Err("Drive system not available".to_string())
+    }
+
+    /// Write a file to a drive.
+    async fn drive_write(&self, drive: &str, path: &str, data: &[u8]) -> Result<(), String> {
+        let _ = (drive, path, data);
+        Err("Drive system not available".to_string())
+    }
+
+    /// Delete a file from a drive.
+    async fn drive_delete(&self, drive: &str, path: &str) -> Result<(), String> {
+        let _ = (drive, path);
+        Err("Drive system not available".to_string())
+    }
+
+    /// Move/rename a file on a drive.
+    async fn drive_move(&self, drive: &str, from: &str, to: &str) -> Result<(), String> {
+        let _ = (drive, from, to);
+        Err("Drive system not available".to_string())
+    }
+
+    /// Copy a file on a drive.
+    async fn drive_copy(&self, drive: &str, from: &str, to: &str) -> Result<(), String> {
+        let _ = (drive, from, to);
+        Err("Drive system not available".to_string())
+    }
+
+    /// Search a drive.
+    async fn drive_search(
+        &self,
+        drive: &str,
+        query: &str,
+        search_type: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let _ = (drive, query, search_type);
+        Err("Drive system not available".to_string())
+    }
+
+    /// Get file metadata/info from drive index.
+    async fn drive_info(&self, drive: &str, path: &str) -> Result<serde_json::Value, String> {
+        let _ = (drive, path);
+        Err("Drive system not available".to_string())
+    }
+
+    /// Get/set tags on a drive file.
+    async fn drive_set_tags(
+        &self,
+        drive: &str,
+        path: &str,
+        tags: &[String],
+    ) -> Result<(), String> {
+        let _ = (drive, path, tags);
+        Err("Drive system not available".to_string())
+    }
+
     /// Spawn an agent with capability inheritance enforcement.
     /// `parent_caps` are the parent's granted capabilities. The kernel MUST verify
     /// that every capability in the child manifest is covered by `parent_caps`.

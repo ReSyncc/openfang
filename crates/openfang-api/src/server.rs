@@ -699,6 +699,53 @@ pub async fn build_router(
             "/v1/models",
             axum::routing::get(crate::openai_compat::list_models),
         )
+        // Drive endpoints
+        .route(
+            "/api/drives",
+            axum::routing::get(routes::list_drives).post(routes::create_drive),
+        )
+        .route(
+            "/api/drives/{name}",
+            axum::routing::delete(routes::delete_drive),
+        )
+        .route(
+            "/api/drives/{name}/ls",
+            axum::routing::get(routes::drive_ls),
+        )
+        .route(
+            "/api/drives/{name}/file",
+            axum::routing::get(routes::drive_read_file)
+                .put(routes::drive_write_file)
+                .delete(routes::drive_delete_file),
+        )
+        .route(
+            "/api/drives/{name}/move",
+            axum::routing::post(routes::drive_move_file),
+        )
+        .route(
+            "/api/drives/{name}/search",
+            axum::routing::get(routes::drive_search),
+        )
+        .route(
+            "/api/drives/{name}/tags",
+            axum::routing::put(routes::drive_update_tags),
+        )
+        .route(
+            "/api/drives/{name}/rules",
+            axum::routing::get(routes::drive_list_rules),
+        )
+        .route(
+            "/api/drives/{name}/repos",
+            axum::routing::get(routes::drive_list_repos),
+        )
+        .route(
+            "/api/drives/{name}/repos/{id}",
+            axum::routing::get(routes::drive_get_repo),
+        )
+        .route(
+            "/api/drives/{name}/index/status",
+            axum::routing::get(routes::drive_index_status),
+        )
         // Dashboard authentication endpoints
         .route("/api/auth/login", axum::routing::post(routes::auth_login))
         .route("/api/auth/logout", axum::routing::post(routes::auth_logout))

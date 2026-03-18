@@ -69,6 +69,16 @@ pub enum Capability {
     EconEarn,
     /// Can transfer funds to agents matching the pattern.
     EconTransfer(String),
+
+    // -- Drive --
+    /// Read files from drive paths matching the glob pattern (e.g. "main:/Documents/Tax/*").
+    DriveRead(String),
+    /// Write files to drive paths matching the glob pattern.
+    DriveWrite(String),
+    /// List directories on drive paths matching the glob pattern.
+    DriveList(String),
+    /// Access git repositories at drive paths matching the pattern.
+    RepoAccess(String),
 }
 
 /// Result of a capability check.
@@ -141,6 +151,20 @@ pub fn capability_matches(granted: &Capability, required: &Capability) -> bool {
         }
         (Capability::EconTransfer(pattern), Capability::EconTransfer(target)) => {
             glob_matches(pattern, target)
+        }
+
+        // Drive capabilities
+        (Capability::DriveRead(pattern), Capability::DriveRead(path)) => {
+            glob_matches(pattern, path)
+        }
+        (Capability::DriveWrite(pattern), Capability::DriveWrite(path)) => {
+            glob_matches(pattern, path)
+        }
+        (Capability::DriveList(pattern), Capability::DriveList(path)) => {
+            glob_matches(pattern, path)
+        }
+        (Capability::RepoAccess(pattern), Capability::RepoAccess(path)) => {
+            glob_matches(pattern, path)
         }
 
         // Simple boolean capabilities

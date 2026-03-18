@@ -11266,6 +11266,490 @@ fn remove_toml_section(content: &str, section: &str) -> String {
     result
 }
 
+// ---------------------------------------------------------------------------
+// Drive endpoints
+// ---------------------------------------------------------------------------
+
+/// GET /api/drives — List all mounted drives.
+pub async fn list_drives(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if let Some(ref dm) = state.kernel.drive_manager {
+        let drives = dm.list_drives().await;
+        Json(serde_json::json!(drives))
+    } else {
+        Json(serde_json::json!([]))
+    }
+}
+
+/// POST /api/drives — Create a new drive.
+pub async fn create_drive(
+    State(state): State<Arc<AppState>>,
+    Json(cfg): Json<openfang_types::config::DriveConfig>,
+) -> impl IntoResponse {
+    let dm = match state.kernel.drive_manager.as_ref() {
+        Some(dm) => dm,
+        None => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Drive system not available"})),
+            )
+        }
+    };
+    let db_path = state.kernel.config.data_dir.clone();
+    match dm.create_drive(&cfg, &db_path).await {
+        Ok(()) => (
+            axum::http::StatusCode::CREATED,
+            Json(serde_json::json!({"status": "created", "name": cfg.name})),
+        ),
+        Err(e) => (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+/// DELETE /api/drives/{name} — Remove a drive.
+pub async fn delete_drive(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let dm = match state.kernel.drive_manager.as_ref() {
+        Some(dm) => dm,
+        None => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Drive system not available"})),
+            )
+        }
+    };
+    match dm.remove_drive(&name).await {
+        Ok(()) => (
+            axum::http::StatusCode::OK,
+            Json(serde_json::json!({"status": "removed"})),
+        ),
+        Err(e) => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+/// GET /api/drives/{name}/ls — List directory contents.
+pub async fn drive_ls(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let dm = match state.kernel.drive_manager.as_ref() {
+        Some(dm) => dm,
+        None => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Drive system not available"})),
+            )
+        }
+    };
+    let path = params.get("path").map(|s| s.as_str()).unwrap_or("/");
+    if openfang_drive::DriveManager::validate_path(path).is_err() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid path: '..' traversal not allowed"})),
+        );
+    }
+    match dm.get_volume(&name).await {
+        Ok(vol) => match vol.list(path).await {
+            Ok(entries) => (axum::http::StatusCode::OK, Json(serde_json::json!(entries))),
+            Err(e) => (
+                axum::http::StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ),
+        },
+        Err(e) => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+/// GET /api/drives/{name}/file — Read/download a file.
+pub async fn drive_read_file(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let dm = match state.kernel.drive_manager.as_ref() {
+        Some(dm) => dm,
+        None => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Drive system not available"})),
+            )
+                .into_response()
+        }
+    };
+    let path = params.get("path").map(|s| s.as_str()).unwrap_or("");
+    if openfang_drive::DriveManager::validate_path(path).is_err() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid path"})),
+        )
+            .into_response();
+    }
+    match dm.get_volume(&name).await {
+        Ok(vol) => match vol.read(path).await {
+            Ok(data) => {
+                let stat = vol.stat(path).await.ok();
+                let mime = stat
+                    .as_ref()
+                    .map(|s| s.mime_type.as_str())
+                    .unwrap_or("application/octet-stream");
+                let filename = stat
+                    .as_ref()
+                    .map(|s| s.name.as_str())
+                    .unwrap_or("file");
+                (
+                    [
+                        (axum::http::header::CONTENT_TYPE, mime.to_string()),
+                        (
+                            axum::http::header::CONTENT_DISPOSITION,
+                            format!("inline; filename=\"{filename}\""),
+                        ),
+                    ],
+                    data,
+                )
+                    .into_response()
+            }
+            Err(e) => (
+                axum::http::StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response(),
+        },
+        Err(e) => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+/// PUT /api/drives/{name}/file — Upload/write a file.
+pub async fn drive_write_file(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    let dm = match state.kernel.drive_manager.as_ref() {
+        Some(dm) => dm,
+        None => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Drive system not available"})),
+            )
+        }
+    };
+    let path = params.get("path").map(|s| s.as_str()).unwrap_or("");
+    if path.is_empty() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Missing 'path' parameter"})),
+        );
+    }
+    if openfang_drive::DriveManager::validate_path(path).is_err() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid path"})),
+        );
+    }
+    match dm.get_volume(&name).await {
+        Ok(vol) => match vol.write(path, &body).await {
+            Ok(()) => (
+                axum::http::StatusCode::OK,
+                Json(serde_json::json!({"status": "written", "path": path, "size": body.len()})),
+            ),
+            Err(e) => (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ),
+        },
+        Err(e) => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+/// DELETE /api/drives/{name}/file — Delete a file.
+pub async fn drive_delete_file(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let dm = match state.kernel.drive_manager.as_ref() {
+        Some(dm) => dm,
+        None => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Drive system not available"})),
+            )
+        }
+    };
+    let path = params.get("path").map(|s| s.as_str()).unwrap_or("");
+    if openfang_drive::DriveManager::validate_path(path).is_err() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid path"})),
+        );
+    }
+    match dm.get_volume(&name).await {
+        Ok(vol) => match vol.delete(path).await {
+            Ok(()) => (
+                axum::http::StatusCode::OK,
+                Json(serde_json::json!({"status": "deleted"})),
+            ),
+            Err(e) => (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ),
+        },
+        Err(e) => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+/// POST /api/drives/{name}/move — Move/rename a file.
+pub async fn drive_move_file(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let dm = match state.kernel.drive_manager.as_ref() {
+        Some(dm) => dm,
+        None => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Drive system not available"})),
+            )
+        }
+    };
+    let from = req["from"].as_str().unwrap_or("");
+    let to = req["to"].as_str().unwrap_or("");
+    if from.is_empty() || to.is_empty() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Missing 'from' or 'to' fields"})),
+        );
+    }
+    match dm.get_volume(&name).await {
+        Ok(vol) => match vol.rename(from, to).await {
+            Ok(()) => (
+                axum::http::StatusCode::OK,
+                Json(serde_json::json!({"status": "moved", "from": from, "to": to})),
+            ),
+            Err(e) => (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ),
+        },
+        Err(e) => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+/// GET /api/drives/{name}/search — Search within a drive.
+pub async fn drive_search(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let dm = match state.kernel.drive_manager.as_ref() {
+        Some(dm) => dm,
+        None => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Drive system not available"})),
+            )
+        }
+    };
+    let query = params.get("q").map(|s| s.as_str()).unwrap_or("");
+    let search_type = params.get("type").map(|s| s.as_str()).unwrap_or("metadata");
+    match dm.get_volume(&name).await {
+        Ok(vol) => {
+            match openfang_drive::search::search(
+                vol.index(),
+                &name,
+                query,
+                search_type,
+                None,
+                None,
+                50,
+            ) {
+                Ok(results) => (axum::http::StatusCode::OK, Json(serde_json::json!(results))),
+                Err(e) => (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                ),
+            }
+        }
+        Err(e) => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+/// PUT /api/drives/{name}/tags — Update file tags.
+pub async fn drive_update_tags(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(req): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let dm = match state.kernel.drive_manager.as_ref() {
+        Some(dm) => dm,
+        None => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Drive system not available"})),
+            )
+        }
+    };
+    let path = req["path"].as_str().unwrap_or("");
+    let tags: Vec<String> = req["tags"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    match dm.get_volume(&name).await {
+        Ok(vol) => match vol.index().set_tags(&name, path, &tags) {
+            Ok(()) => (
+                axum::http::StatusCode::OK,
+                Json(serde_json::json!({"status": "updated"})),
+            ),
+            Err(e) => (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ),
+        },
+        Err(e) => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+/// GET /api/drives/{name}/rules — List classification rules.
+pub async fn drive_list_rules(
+    State(state): State<Arc<AppState>>,
+    Path(_name): Path<String>,
+) -> impl IntoResponse {
+    let dm = match state.kernel.drive_manager.as_ref() {
+        Some(dm) => dm,
+        None => return Json(serde_json::json!([])),
+    };
+    let rules = dm.classification().rules();
+    Json(serde_json::json!(rules))
+}
+
+/// GET /api/drives/{name}/repos — List repos on drive.
+pub async fn drive_list_repos(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let dm = match state.kernel.drive_manager.as_ref() {
+        Some(dm) => dm,
+        None => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Drive system not available"})),
+            )
+        }
+    };
+    match dm.get_volume(&name).await {
+        Ok(vol) => match vol.index().list_repos(&name) {
+            Ok(repos) => (axum::http::StatusCode::OK, Json(serde_json::json!(repos))),
+            Err(e) => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ),
+        },
+        Err(e) => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+/// GET /api/drives/{name}/repos/{id} — Repo detail.
+pub async fn drive_get_repo(
+    State(state): State<Arc<AppState>>,
+    Path((name, id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let dm = match state.kernel.drive_manager.as_ref() {
+        Some(dm) => dm,
+        None => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Drive system not available"})),
+            )
+        }
+    };
+    match dm.get_volume(&name).await {
+        Ok(vol) => match vol.index().get_repo(&id) {
+            Ok(Some(repo)) => (axum::http::StatusCode::OK, Json(serde_json::json!(repo))),
+            Ok(None) => (
+                axum::http::StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Repo not found"})),
+            ),
+            Err(e) => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ),
+        },
+        Err(e) => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
+/// GET /api/drives/{name}/index/status — Pipeline queue status.
+pub async fn drive_index_status(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let dm = match state.kernel.drive_manager.as_ref() {
+        Some(dm) => dm,
+        None => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Drive system not available"})),
+            )
+        }
+    };
+    match dm.get_volume(&name).await {
+        Ok(vol) => match vol.index().pipeline_status() {
+            Ok(status) => (axum::http::StatusCode::OK, Json(serde_json::json!(status))),
+            Err(e) => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ),
+        },
+        Err(e) => (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod channel_config_tests {
     use super::*;

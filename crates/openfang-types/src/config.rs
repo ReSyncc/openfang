@@ -1099,6 +1099,12 @@ pub struct KernelConfig {
     /// Defaults to `~/.openfang/workflows`. Set to empty string to disable.
     #[serde(default)]
     pub workflows_dir: Option<PathBuf>,
+    /// Drive volumes (virtual filesystem mounts).
+    #[serde(default)]
+    pub drives: Vec<DriveConfig>,
+    /// Drive classification rules for auto-organization.
+    #[serde(default)]
+    pub drives_rules: Vec<DriveRuleConfig>,
 }
 
 /// Dashboard authentication (username/password login).
@@ -1182,6 +1188,83 @@ impl Default for BudgetConfig {
 
 fn default_max_cron_jobs() -> usize {
     500
+}
+
+// ---------------------------------------------------------------------------
+// Drive configuration
+// ---------------------------------------------------------------------------
+
+/// Configuration for a single drive volume.
+///
+/// ```toml
+/// [[drives]]
+/// name = "main"
+/// backend = "local"
+/// path = "~/.openfang/drive/"
+/// auto_organize = true
+/// read_only = false
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DriveConfig {
+    /// Unique name for this drive (used in paths like "main:/Documents/file.pdf").
+    pub name: String,
+    /// Storage backend type (currently only "local" is supported).
+    #[serde(default = "default_drive_backend")]
+    pub backend: String,
+    /// Path for local backend. Supports `~` expansion.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Enable automatic file organization via classification rules.
+    #[serde(default)]
+    pub auto_organize: bool,
+    /// Mount as read-only (no writes allowed).
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+fn default_drive_backend() -> String {
+    "local".to_string()
+}
+
+/// A classification rule for auto-organizing files.
+///
+/// ```toml
+/// [[drives_rules]]
+/// name = "tax-w2"
+/// drive = "main"
+/// destination = "/Documents/Tax/{year}/W2s/"
+/// tags = ["tax", "w2"]
+/// mime = "application/pdf"
+/// content_contains = ["W-2", "Wage and Tax"]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DriveRuleConfig {
+    /// Rule name (e.g. "tax-w2").
+    pub name: String,
+    /// Drive this rule applies to (e.g. "main").
+    #[serde(default = "default_drive_name")]
+    pub drive: String,
+    /// Destination path template (supports {year}, {month}, {day}).
+    pub destination: String,
+    /// Tags to apply when this rule matches.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// MIME type to match (exact, e.g. "application/pdf").
+    #[serde(default)]
+    pub mime: Option<String>,
+    /// MIME prefix to match (e.g. "image/").
+    #[serde(default)]
+    pub mime_prefix: Option<String>,
+    /// Filename glob pattern to match.
+    #[serde(default)]
+    pub filename_glob: Option<String>,
+    /// Content must contain ALL of these strings (case-insensitive).
+    #[serde(default)]
+    pub content_contains: Vec<String>,
+}
+
+fn default_drive_name() -> String {
+    "main".to_string()
 }
 
 /// Configuration entry for an MCP server.
@@ -1308,6 +1391,8 @@ impl Default for KernelConfig {
             oauth: OAuthConfig::default(),
             auth: AuthConfig::default(),
             workflows_dir: None,
+            drives: Vec::new(),
+            drives_rules: Vec::new(),
         }
     }
 }
