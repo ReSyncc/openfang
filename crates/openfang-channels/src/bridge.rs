@@ -1777,8 +1777,8 @@ const ALLOWED_FILE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "tiff",
 ];
 
-/// Maximum file size for channel downloads (20 MB).
-const MAX_CHANNEL_FILE_BYTES: usize = 20 * 1024 * 1024;
+/// Maximum file size for channel downloads (100 MB).
+const MAX_CHANNEL_FILE_BYTES: usize = 100 * 1024 * 1024;
 
 /// Check if a filename has an allowed extension for download.
 fn is_allowed_file_type(filename: &str) -> bool {
