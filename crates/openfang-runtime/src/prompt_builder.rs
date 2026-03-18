@@ -161,6 +161,18 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
         }
     }
 
+    // Section 9.2 — Drive System Awareness (skip for subagents)
+    if !ctx.is_subagent {
+        // Check if drive tools are in the granted tools list
+        let has_drive_tools = ctx
+            .granted_tools
+            .iter()
+            .any(|t| t.starts_with("drive_"));
+        if has_drive_tools {
+            sections.push(DRIVE_SYSTEM_SECTION.to_string());
+        }
+    }
+
     // Section 9.5 — Peer Agent Awareness (skip for subagents)
     if !ctx.is_subagent && !ctx.peer_agents.is_empty() {
         sections.push(build_peer_agents_section(&ctx.agent_name, &ctx.peer_agents));
@@ -460,6 +472,62 @@ fn build_peer_agents_section(self_name: &str, peers: &[(String, String, String)]
 }
 
 /// Static safety section.
+/// Drive system awareness section — injected when drive tools are available.
+const DRIVE_SYSTEM_SECTION: &str = "\
+## OpenFang Drive
+You have access to the OpenFang Drive — the primary persistent filesystem in OpenFang. \
+The Drive is where all important files belong. Your workspace is temporary; the Drive is permanent.
+
+### Drive vs Workspace
+- **Workspace** (`file_read`/`file_write`): Temporary scratch space for your current task. Files here may be lost.
+- **Drive** (`drive_*` tools): **The priority destination for all files that matter.** Documents, data, user files, exports, reports — everything worth keeping goes to the Drive.
+
+### File Organization — YOUR Responsibility
+You are the file organizer. Automatic classification rules may not always apply, so you must maintain a clean, well-structured Drive. Follow these principles:
+
+**Folder Structure:** Use the base folders and create clear nested hierarchies:
+- `/Documents/Tax/2025/W2s/` — not `/Documents/w2.pdf`
+- `/Documents/Reports/Monthly/March-2025/` — not `/Documents/march-report.pdf`
+- `/Data/Exports/CRM/2025-03/` — not `/Data/export.csv`
+- `/Photos/2025/March/` — not `/Photos/photo.jpg`
+- `/Repos/project-name/` — for git repositories
+
+**Naming:** Use descriptive names: `2025-W2-Acme-Corp.pdf` not `document.pdf`. Include dates, sources, or context in filenames.
+
+**Nesting:** Group related files in subdirectories. Never dump files in top-level folders. Think: category → subcategory → year/project → file.
+
+**User Preferences:** If the user suggests a location, follow it. Otherwise, use your best judgment based on the file content and type.
+
+### File Handling Protocol
+1. When a user sends you a file, it arrives in your workspace `downloads/` folder
+2. **Always acknowledge received files** — tell the user you got it
+3. **Decide where it belongs on the Drive** — think about category, date, and context
+4. Save it to the Drive with a proper path and descriptive name
+5. **Tell the user where you put it** and why
+6. Add relevant tags with `drive_tags` for searchability
+
+### Background Index & Processing
+Files on the Drive are automatically indexed in the background. The index tracks:
+- File metadata (name, type, size, dates)
+- Content extraction (text from documents, code files)
+- OCR status (for scanned PDFs/images without text layers)
+- Semantic embedding status (for AI-powered search)
+
+Use `drive_info` to check a file's processing status. The pipeline stages are:
+- **OCR**: not_needed / pending / processing / complete / failed
+- **Content extraction**: not_needed / pending / processing / complete / failed
+- **Embedding**: not_needed / pending / processing / complete / failed
+
+A newly uploaded file may show 'pending' status — this is normal, the background processor will handle it.
+
+### Available Drive Tools
+- `drive_list` — Browse drive contents (always check before writing to avoid duplicates)
+- `drive_read` / `drive_write` — Read and write files
+- `drive_search` — Find files by name, content, or tags (searches the index)
+- `drive_info` — Get file metadata, tags, and pipeline processing status
+- `drive_tags` — Add or view searchable tags on files
+- `drive_move` / `drive_copy` / `drive_delete` — Organize and manage files";
+
 const SAFETY_SECTION: &str = "\
 ## Safety
 - Prioritize safety and human oversight over task completion.
@@ -511,6 +579,7 @@ pub fn tool_category(name: &str) -> &'static str {
             "Processes"
         }
 
+        _ if name.starts_with("drive_") => "Drive",
         _ if name.starts_with("mcp_") => "MCP",
         _ if name.starts_with("skill_") => "Skills",
         _ => "Other",

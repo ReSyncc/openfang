@@ -668,14 +668,41 @@ async fn dispatch_message(
     }
 
     // For files: try to download allowed types to agent workspace.
-    // `channel_file_saved` holds the workspace-relative path if download succeeded.
-    let mut channel_file_saved: Option<(String, String, usize)> = None; // (filename, rel_path, size)
-    if let ChannelContent::File {
+    // `channel_file_status` tracks what happened so the agent gets informed.
+    enum FileStatus {
+        Saved { filename: String, rel_path: String, size: usize },
+        Blocked { filename: String, reason: String },
+        Failed { filename: String, reason: String },
+        NotAFile,
+    }
+
+    let channel_file_status = if let ChannelContent::File {
         ref url,
         ref filename,
     } = message.content
     {
-        if is_allowed_file_type(filename) {
+        if !is_allowed_file_type(filename) {
+            let ext = filename.rsplit('.').next().unwrap_or("unknown");
+            let reason = format!("File type '.{ext}' is not accepted for security reasons");
+            // Immediately tell the user their file was rejected
+            send_response(
+                adapter,
+                &message.sender,
+                format!("I can't accept that file type (.{ext}). Supported types include: PDF, DOCX, XLSX, CSV, JSON, TXT, images, code files, and ZIP archives."),
+                thread_id,
+                output_format,
+            ).await;
+            FileStatus::Blocked { filename: filename.clone(), reason }
+        } else {
+            // Quick ack — tell the user we're processing before the download
+            send_response(
+                adapter,
+                &message.sender,
+                format!("Received {filename}, downloading..."),
+                thread_id,
+                output_format,
+            ).await;
+
             let agent_id = router.resolve(
                 &message.channel,
                 &message.sender.platform_id,
@@ -688,26 +715,26 @@ async fn dispatch_message(
                         let data_len = data.len();
                         match handle.save_file_to_workspace(aid, filename, &data).await {
                             Ok(rel_path) => {
-                                channel_file_saved =
-                                    Some((filename.clone(), rel_path, data_len));
+                                FileStatus::Saved { filename: filename.clone(), rel_path, size: data_len }
                             }
                             Err(e) => {
                                 warn!("Failed to save file to workspace: {e}");
+                                FileStatus::Failed { filename: filename.clone(), reason: e }
                             }
                         }
                     }
                     Err(e) => {
                         warn!("Failed to download file from channel: {e}");
+                        FileStatus::Failed { filename: filename.clone(), reason: e }
                     }
                 }
+            } else {
+                FileStatus::Failed { filename: filename.clone(), reason: "No agent available to receive the file".to_string() }
             }
-        } else {
-            info!(
-                filename = filename,
-                "File type not in allowlist — skipping download"
-            );
         }
-    }
+    } else {
+        FileStatus::NotAFile
+    };
 
     let text = match &message.content {
         ChannelContent::Text(t) => t.clone(),
@@ -726,21 +753,38 @@ async fn dispatch_message(
             ref url,
             ref filename,
         } => {
-            if let Some((ref fname, ref rel_path, size)) = channel_file_saved {
-                let size_kb = size / 1024;
-                format!(
-                    "The user sent a file via {}. It has been saved to your workspace:\n\
-                     - File: {fname}\n\
-                     - Workspace path: {rel_path}\n\
-                     - Size: {size_kb} KB\n\n\
-                     You can read it with `file_read` using the path above. \
-                     If this file should be kept long-term (e.g. tax documents, reports, \
-                     important data), use `drive_write` to save it to the Drive where it will be \
-                     organized, indexed, and searchable.",
-                    ct_str,
-                )
-            } else {
-                format!("[User sent a file ({filename}): {url}]")
+            match &channel_file_status {
+                FileStatus::Saved { filename: fname, rel_path, size } => {
+                    let size_kb = size / 1024;
+                    format!(
+                        "The user sent a file via {ct_str}. It has been saved to your workspace:\n\
+                         - File: {fname}\n\
+                         - Workspace path: {rel_path}\n\
+                         - Size: {size_kb} KB\n\n\
+                         You MUST respond to the user acknowledging you received the file. \
+                         You can read it with `file_read` using the path above. \
+                         If this file should be kept long-term (e.g. tax documents, reports, \
+                         important data), use `drive_write` to save it to the Drive where it will be \
+                         organized, indexed, and searchable.",
+                    )
+                }
+                FileStatus::Blocked { filename: fname, reason } => {
+                    format!(
+                        "The user tried to send a file '{fname}' via {ct_str}, but it was blocked: {reason}. \
+                         The file was NOT downloaded. Do NOT respond about this — \
+                         the user has already been notified directly.",
+                    )
+                }
+                FileStatus::Failed { filename: fname, reason } => {
+                    format!(
+                        "The user sent a file '{fname}' via {ct_str}, but it could not be saved: {reason}. \
+                         Let the user know there was a problem receiving their file and ask them to try again. \
+                         The original URL was: {url}",
+                    )
+                }
+                FileStatus::NotAFile => {
+                    format!("[User sent a file ({filename}): {url}]")
+                }
             }
         }
         ChannelContent::Voice {
