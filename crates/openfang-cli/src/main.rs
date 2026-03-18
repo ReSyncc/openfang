@@ -4532,7 +4532,7 @@ pub(crate) fn start_daemon_background() -> Result<String, String> {
         const DETACHED_PROCESS: u32 = 0x00000008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
         std::process::Command::new(&exe)
-            .arg("start")
+            .args(["start", "--foreground"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -4544,7 +4544,7 @@ pub(crate) fn start_daemon_background() -> Result<String, String> {
     #[cfg(not(windows))]
     {
         std::process::Command::new(&exe)
-            .arg("start")
+            .args(["start", "--foreground"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
