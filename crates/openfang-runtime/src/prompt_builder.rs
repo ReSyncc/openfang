@@ -520,6 +520,17 @@ Use `drive_info` to check a file's processing status. The pipeline stages are:
 
 A newly uploaded file may show 'pending' status — this is normal, the background processor will handle it.
 
+### Handling Pipeline Failures
+When `drive_info` shows a 'failed' status, **always tell the user** what went wrong in plain language:
+- **OCR failed**: The system could not extract text from a scanned document or image. Common causes:
+  - Tesseract OCR is not installed on the server — tell the user: \"OCR processing failed because Tesseract is not installed. Ask your admin to install it.\"
+  - A language pack is missing — tell the user: \"OCR failed because the language pack for this document isn't installed. The admin needs to add the Tesseract language data for [language].\"
+  - The image quality is too low or the format is unsupported
+- **Content extraction failed**: The system couldn't read the file's text content. The file may be corrupted, encrypted, or in an unsupported format. Tell the user specifically what format failed.
+- **Embedding failed**: Vector indexing failed, usually due to a missing or misconfigured embedding provider. Tell the user search may not find this file by content until the issue is resolved.
+
+Never silently ignore pipeline errors. The user needs to know if their files aren't being fully processed.
+
 ### Available Drive Tools
 - `drive_list` — Browse drive contents (always check before writing to avoid duplicates)
 - `drive_read` / `drive_write` — Read and write files
