@@ -31,4 +31,4 @@ EXPOSE 4200
 VOLUME /data
 ENV OPENFANG_HOME=/data
 ENTRYPOINT ["openfang"]
-CMD ["start"]
+CMD ["start", "--foreground"]

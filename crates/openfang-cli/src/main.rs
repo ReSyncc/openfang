@@ -117,6 +117,10 @@ enum Commands {
         /// Auto-approve all tool calls (no confirmation prompts).
         #[arg(long)]
         yolo: bool,
+        /// Run in the foreground (block the terminal). Default: daemonize to background.
+        /// Use this for Docker containers or debugging.
+        #[arg(long)]
+        foreground: bool,
     },
     /// Stop the running daemon.
     Stop,
@@ -922,7 +926,7 @@ fn main() {
         }
         Some(Commands::Tui) => tui::run(cli.config),
         Some(Commands::Init { quick }) => cmd_init(quick),
-        Some(Commands::Start { yolo }) => cmd_start(cli.config, yolo),
+        Some(Commands::Start { yolo, foreground }) => cmd_start(cli.config, yolo, foreground),
         Some(Commands::Stop) => cmd_stop(),
         Some(Commands::Agent(sub)) => match sub {
             AgentCommands::New { template } => cmd_agent_new(cli.config, template),
@@ -1017,7 +1021,7 @@ fn main() {
             ModelsCommands::Set { model } => cmd_models_set(model),
         },
         Some(Commands::Gateway(sub)) => match sub {
-            GatewayCommands::Start => cmd_start(cli.config, false),
+            GatewayCommands::Start => cmd_start(cli.config, false, false),
             GatewayCommands::Stop => cmd_stop(),
             GatewayCommands::Status { json } => cmd_status(cli.config, json),
         },
@@ -1465,18 +1469,52 @@ decay_rate = 0.05
     }
 }
 
-fn cmd_start(config: Option<PathBuf>, yolo: bool) {
+fn cmd_start(config: Option<PathBuf>, yolo: bool, foreground: bool) {
+    // If already running, just report it
     if let Some(base) = find_daemon() {
-        ui::error_with_fix(
-            &format!("Daemon already running at {base}"),
-            "Use `openfang status` to check it, or stop it first",
-        );
-        std::process::exit(1);
+        ui::success(&format!("Daemon already running at {base}"));
+        ui::kv("Dashboard", &format!("{base}/"));
+        ui::hint("Use `openfang stop` to stop it, or `openfang status` to check");
+        return;
     }
 
+    // Foreground mode: block the terminal (for Docker / debugging)
+    if foreground {
+        cmd_start_foreground(config, yolo);
+        return;
+    }
+
+    // Default: daemonize — spawn background process and return
     ui::banner();
     ui::blank();
-    println!("  Starting daemon...");
+    println!("  Starting daemon in background...");
+    ui::blank();
+
+    match start_daemon_background() {
+        Ok(url) => {
+            ui::success(&format!("Daemon started at {url}"));
+            ui::kv("Dashboard", &format!("{url}/"));
+            ui::blank();
+            ui::hint("Run `openfang status` to check, `openfang stop` to stop");
+            ui::hint("Run `openfang chat` to talk to an agent");
+            ui::blank();
+        }
+        Err(e) => {
+            ui::error_with_fix(
+                &format!("Could not start daemon: {e}"),
+                "Try `openfang start --foreground` to see the full error output",
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Run the daemon in the foreground (blocks until Ctrl+C or shutdown).
+/// Used by `openfang start --foreground` and internally by the background-spawned process.
+fn cmd_start_foreground(config: Option<PathBuf>, yolo: bool) {
+    ui::banner();
+    ui::blank();
+    println!("  Starting daemon (foreground)...");
     ui::blank();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -1518,7 +1556,6 @@ fn cmd_start(config: Option<PathBuf>, yolo: bool) {
         ui::kv("Provider", &provider);
         ui::kv("Model", &model);
         ui::blank();
-        ui::hint("Open the dashboard in your browser, or run `openfang chat`");
         ui::hint("Press Ctrl+C to stop the daemon");
         ui::blank();
 
