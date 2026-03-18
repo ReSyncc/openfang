@@ -705,6 +705,10 @@ pub async fn build_router(
             axum::routing::get(routes::list_drives).post(routes::create_drive),
         )
         .route(
+            "/api/drives/overview",
+            axum::routing::get(routes::drive_overview),
+        )
+        .route(
             "/api/drives/{name}",
             axum::routing::delete(routes::delete_drive),
         )

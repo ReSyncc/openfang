@@ -11750,6 +11750,59 @@ pub async fn drive_index_status(
     }
 }
 
+/// GET /api/drives/overview — Drive overview for the dashboard (recent files, pipeline, errors).
+pub async fn drive_overview(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let dm = match state.kernel.drive_manager.as_ref() {
+        Some(dm) => dm,
+        None => {
+            return Json(serde_json::json!({
+                "available": false,
+                "recent_files": [],
+                "pipeline": null,
+                "errors": [],
+            }))
+        }
+    };
+
+    // Collect data from the first (main) drive
+    let drives = dm.list_drives().await;
+    let drive_name = drives.first().map(|d| d.name.as_str()).unwrap_or("main");
+
+    let (recent, pipeline, errors) = match dm.get_volume(drive_name).await {
+        Ok(vol) => {
+            let recent = vol.index().recent_files(drive_name, 10).unwrap_or_default();
+            let pipeline = vol.index().pipeline_status().ok();
+            let errors = vol.index().pipeline_errors(drive_name, 10).unwrap_or_default();
+            (recent, pipeline, errors)
+        }
+        Err(_) => (vec![], None, vec![]),
+    };
+
+    Json(serde_json::json!({
+        "available": true,
+        "drive_name": drive_name,
+        "drives_count": drives.len(),
+        "recent_files": recent,
+        "pipeline": pipeline,
+        "errors": errors.iter().map(|e| {
+            let mut err_info = serde_json::json!({
+                "path": e.path,
+                "filename": e.filename,
+            });
+            if let openfang_drive::index::PipelineStatus::Failed(ref msg) = e.ocr_status {
+                err_info["ocr_error"] = serde_json::json!(msg);
+            }
+            if let openfang_drive::index::PipelineStatus::Failed(ref msg) = e.content_status {
+                err_info["content_error"] = serde_json::json!(msg);
+            }
+            if let openfang_drive::index::PipelineStatus::Failed(ref msg) = e.embedding_status {
+                err_info["embedding_error"] = serde_json::json!(msg);
+            }
+            err_info
+        }).collect::<Vec<_>>(),
+    }))
+}
+
 #[cfg(test)]
 mod channel_config_tests {
     use super::*;

@@ -272,6 +272,42 @@ impl DriveIndex {
         })
     }
 
+    /// Get the most recently modified files.
+    pub fn recent_files(&self, drive: &str, limit: usize) -> DriveResult<Vec<DriveFileEntry>> {
+        let conn = self.conn.lock().map_err(|e| DriveError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT id, drive, path, filename, mime_type, size_bytes, created_at, modified_at, tags, classified_by, ocr_status, ocr_error, content_status, content_error, embedding_status, embedding_error, checksum, extracted_text FROM drive_files WHERE drive = ?1 ORDER BY modified_at DESC LIMIT ?2")
+            .map_err(|e| DriveError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(rusqlite::params![drive, limit as i64], |row| {
+                Ok(DriveFileEntry::from_row(row).unwrap())
+            })
+            .map_err(|e| DriveError::Database(e.to_string()))?;
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.map_err(|e| DriveError::Database(e.to_string()))?);
+        }
+        Ok(results)
+    }
+
+    /// Get files with pipeline errors.
+    pub fn pipeline_errors(&self, drive: &str, limit: usize) -> DriveResult<Vec<DriveFileEntry>> {
+        let conn = self.conn.lock().map_err(|e| DriveError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT id, drive, path, filename, mime_type, size_bytes, created_at, modified_at, tags, classified_by, ocr_status, ocr_error, content_status, content_error, embedding_status, embedding_error, checksum, extracted_text FROM drive_files WHERE drive = ?1 AND (ocr_status = 'failed' OR content_status = 'failed' OR embedding_status = 'failed') ORDER BY modified_at DESC LIMIT ?2")
+            .map_err(|e| DriveError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(rusqlite::params![drive, limit as i64], |row| {
+                Ok(DriveFileEntry::from_row(row).unwrap())
+            })
+            .map_err(|e| DriveError::Database(e.to_string()))?;
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.map_err(|e| DriveError::Database(e.to_string()))?);
+        }
+        Ok(results)
+    }
+
     // -- Repo registry --
 
     /// Register a git repo.
