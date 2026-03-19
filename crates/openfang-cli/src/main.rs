@@ -1530,6 +1530,7 @@ fn cmd_start(config: Option<PathBuf>, yolo: bool) {
         ui::blank();
         ui::hint("Open the dashboard in your browser, or run `openfang chat`");
         ui::hint("Press Ctrl+C to stop the daemon");
+        ui::hint("Tip: use `openfang start -d` to run in the background");
         ui::blank();
 
         if let Err(e) =

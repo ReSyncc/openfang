@@ -44,7 +44,7 @@ The entire system compiles to a **single ~32MB binary**. One install, one comman
 ```bash
 curl -fsSL https://openfang.sh/install | sh
 openfang init
-openfang start
+openfang start              # or `openfang start -d` to run in the background
 # Dashboard live at http://localhost:4200
 ```
 
@@ -54,7 +54,7 @@ openfang start
 ```powershell
 irm https://openfang.sh/install.ps1 | iex
 openfang init
-openfang start
+openfang start              # or `openfang start -d` to run in the background
 ```
 
 </details>
@@ -319,7 +319,7 @@ The gateway listens on port `3009` by default. Override with `WHATSAPP_GATEWAY_P
 **5. Start OpenFang:**
 
 ```bash
-openfang start
+openfang start              # or `openfang start -d` to run in the background
 # Dashboard at http://localhost:4200
 ```
 
@@ -413,7 +413,7 @@ curl -fsSL https://openfang.sh/install | sh
 # 2. Initialize — walks you through provider setup
 openfang init
 
-# 3. Start the daemon
+# 3. Start the daemon (add -d to run in the background)
 openfang start
 
 # 4. Dashboard is live at http://localhost:4200
@@ -435,7 +435,7 @@ openfang agent spawn coder
 ```powershell
 irm https://openfang.sh/install.ps1 | iex
 openfang init
-openfang start
+openfang start              # or `openfang start -d` to run in the background
 ```
 
 </details>
