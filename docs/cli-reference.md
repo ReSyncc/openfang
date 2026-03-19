@@ -112,8 +112,16 @@ openfang init --quick
 Start the OpenFang daemon (kernel + API server).
 
 ```
-openfang start [--config <PATH>]
+openfang start [--config <PATH>] [--detach|-d] [--yolo]
 ```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--config <PATH>` | Path to a custom `config.toml` file. |
+| `-d`, `--detach` | Start the daemon in the background and return immediately. The daemon continues running after the terminal is closed. |
+| `--yolo` | Auto-approve all tool calls (no confirmation prompts). |
 
 **Behavior:**
 
@@ -121,12 +129,13 @@ openfang start [--config <PATH>]
 - Boots the OpenFang kernel (loads config, initializes SQLite database, loads agents, connects MCP servers, starts background tasks).
 - Starts the HTTP API server on the address specified in `config.toml` (default: `127.0.0.1:4200`).
 - Writes `daemon.json` to `~/.openfang/` so other CLI commands can discover the running daemon.
-- Blocks until interrupted with `Ctrl+C`.
+- **Foreground (default):** Blocks until interrupted with `Ctrl+C`.
+- **Detached (`-d`):** Spawns a background process and returns immediately. All flags (`--config`, `--yolo`) are forwarded to the background process.
 
-**Output:**
+**Output (foreground):**
 
 ```
-  OpenFang Agent OS v0.1.0
+  OpenFang Agent OS v0.5.0
 
   Starting daemon...
 
@@ -143,14 +152,34 @@ openfang start [--config <PATH>]
   hint: Press Ctrl+C to stop the daemon
 ```
 
+**Output (detached):**
+
+```
+  OpenFang Agent OS v0.5.0
+
+  Starting daemon (detached)...
+
+  [ok] Daemon started at http://127.0.0.1:4200
+  Dashboard:  http://127.0.0.1:4200/
+
+  hint: Run `openfang status` to check, `openfang stop` to stop
+  hint: Run `openfang chat` to talk to an agent
+```
+
 **Example:**
 
 ```bash
-# Start with default config
+# Start in foreground (blocks terminal, Ctrl+C to stop)
 openfang start
 
-# Start with custom config
-openfang start --config /path/to/config.toml
+# Start in background (returns immediately)
+openfang start -d
+
+# Start in background with custom config
+openfang start -d --config /path/to/config.toml
+
+# Start with auto-approval in background
+openfang start -d --yolo
 ```
 
 ---

@@ -117,6 +117,10 @@ enum Commands {
         /// Auto-approve all tool calls (no confirmation prompts).
         #[arg(long)]
         yolo: bool,
+        /// Detach: start the daemon in the background and return immediately.
+        /// The daemon continues running after the terminal is closed.
+        #[arg(short = 'd', long)]
+        detach: bool,
     },
     /// Stop the running daemon.
     Stop,
@@ -922,7 +926,13 @@ fn main() {
         }
         Some(Commands::Tui) => tui::run(cli.config),
         Some(Commands::Init { quick }) => cmd_init(quick),
-        Some(Commands::Start { yolo }) => cmd_start(cli.config, yolo),
+        Some(Commands::Start { yolo, detach }) => {
+            if detach {
+                cmd_start_detached(cli.config, yolo);
+            } else {
+                cmd_start(cli.config, yolo);
+            }
+        }
         Some(Commands::Stop) => cmd_stop(),
         Some(Commands::Agent(sub)) => match sub {
             AgentCommands::New { template } => cmd_agent_new(cli.config, template),
@@ -1532,6 +1542,43 @@ fn cmd_start(config: Option<PathBuf>, yolo: bool) {
         ui::blank();
         println!("  OpenFang daemon stopped.");
     });
+}
+
+/// Start the daemon in detached (background) mode.
+///
+/// Spawns a background process running `openfang start` (foreground) and
+/// polls for readiness. Forwards `--config` if provided.
+fn cmd_start_detached(config: Option<PathBuf>, yolo: bool) {
+    if let Some(base) = find_daemon() {
+        ui::error_with_fix(
+            &format!("Daemon already running at {base}"),
+            "Use `openfang status` to check it, or `openfang stop` to stop it first",
+        );
+        std::process::exit(1);
+    }
+
+    ui::banner();
+    ui::blank();
+    println!("  Starting daemon (detached)...");
+    ui::blank();
+
+    match start_daemon_background(config.as_deref(), yolo) {
+        Ok(url) => {
+            ui::success(&format!("Daemon started at {url}"));
+            ui::kv("Dashboard", &format!("{url}/"));
+            ui::blank();
+            ui::hint("Run `openfang status` to check, `openfang stop` to stop");
+            ui::hint("Run `openfang chat` to talk to an agent");
+            ui::blank();
+        }
+        Err(e) => {
+            ui::error_with_fix(
+                &format!("Could not start daemon: {e}"),
+                "Try `openfang start` (without -d) to see the full error output",
+            );
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Read the api_key from ~/.openfang/config.toml (if any).
@@ -2943,7 +2990,7 @@ fn cmd_dashboard() {
     } else {
         // Auto-start the daemon
         ui::hint("No daemon running — starting one now...");
-        match start_daemon_background() {
+        match start_daemon_background(None, false) {
             Ok(url) => {
                 ui::success("Daemon started");
                 url
@@ -4485,9 +4532,22 @@ pub(crate) fn test_api_key(provider: &str, env_var: &str) -> bool {
 
 /// Spawn `openfang start` as a detached background process.
 ///
+/// Forwards `--config` and `--yolo` flags to the child process.
 /// Polls for daemon health for up to 10 seconds. Returns the daemon URL on success.
-pub(crate) fn start_daemon_background() -> Result<String, String> {
+pub(crate) fn start_daemon_background(
+    config: Option<&std::path::Path>,
+    yolo: bool,
+) -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| format!("Cannot find executable: {e}"))?;
+
+    let mut args = vec!["start".to_string()];
+    if let Some(cfg) = config {
+        args.push("--config".to_string());
+        args.push(cfg.to_string_lossy().to_string());
+    }
+    if yolo {
+        args.push("--yolo".to_string());
+    }
 
     #[cfg(windows)]
     {
@@ -4495,7 +4555,7 @@ pub(crate) fn start_daemon_background() -> Result<String, String> {
         const DETACHED_PROCESS: u32 = 0x00000008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
         std::process::Command::new(&exe)
-            .arg("start")
+            .args(&args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -4507,7 +4567,7 @@ pub(crate) fn start_daemon_background() -> Result<String, String> {
     #[cfg(not(windows))]
     {
         std::process::Command::new(&exe)
-            .arg("start")
+            .args(&args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
